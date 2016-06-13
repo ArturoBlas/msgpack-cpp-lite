@@ -107,9 +107,15 @@ static const uint8_t MP_DOUBLE = (uint8_t) 0xcb;
  *****************************************************/
 
 //! Raw bytes
-static const uint8_t MP_RAW16 = (uint8_t) 0xda;
-static const uint8_t MP_RAW32 = (uint8_t) 0xdb;
-static const uint8_t MP_FIXRAW = (uint8_t) 0xa0; //!< Last 5 bits is size
+static const uint8_t MP_RAW8  = (uint8_t) 0xC4;
+static const uint8_t MP_RAW16 = (uint8_t) 0xC5;
+static const uint8_t MP_RAW32 = (uint8_t) 0xC6;
+
+//! string type
+static const uint8_t MP_STR8  = (uint8_t) 0xd9;
+static const uint8_t MP_STR16 = (uint8_t) 0xda;
+static const uint8_t MP_STR32 = (uint8_t) 0xdb;
+static const uint8_t MP_FIXSTR = (uint8_t) 0xA0; //!< Last 5 bits is size
 
 /*****************************************************
  * Container types
@@ -333,6 +339,33 @@ class Packer
     {
         return pack(value.c_str());
     }
+    /**
+     * Pack a strings memory area given a pointer to it and
+     * the size in bytes.
+     * @param data Pointer to the memory area.
+     * @param length Length of the memory area in bytes.
+     */
+    Packer& pack(const char* data, std::size_t length)
+    {
+      if (length <= bm::MAX_5BIT)
+      {
+         write((uint8_t) (((uint8_t) length) | bm::MP_FIXSTR));
+      }
+      else if (length <= bm::MAX_8BIT)
+      {
+        write(bm::MP_STR8).write((uint8_t) length );
+      }
+      else if (length <= bm::MAX_16BIT)
+      {
+        write(bm::MP_STR16).write<uint16_t>((uint16_t)length);
+      }
+      else
+      {
+        write(bm::MP_STR32).write<uint32_t>(length);
+      }
+      out_.write(data, length);
+      return *this;
+    }
 
     /**
      * Pack a raw memory area given a pointer to it and
@@ -341,21 +374,21 @@ class Packer
      * @param data Pointer to the memory area.
      * @param length Length of the memory area in bytes.
      */
-    Packer& pack(const char* data, std::size_t length)
+    Packer& pack(const uint8_t* data, std::size_t length)
     {
-      if (length <= bm::MAX_5BIT)
+      if (length <= bm::MAX_8BIT)
       {
-        write((int8_t) (((int8_t) length) | bm::MP_FIXRAW));
+        write(bm::MP_RAW8).write((uint8_t) length );
       }
       else if (length <= bm::MAX_16BIT)
       {
-        write(bm::MP_RAW16).write<int16_t>(length);
+        write(bm::MP_RAW16).write<uint16_t>((uint16_t)length);
       }
       else
       {
-        write(bm::MP_RAW32).write<int32_t>(length);
+        write(bm::MP_RAW32).write<uint32_t>(length);
       }
-      out_.write(data, length);
+      out_.write( (char*)data, length);
       return *this;
     }
 
@@ -1168,17 +1201,29 @@ class Unpacker
         case bm::MP_MAP32:
           read(int16Val);
           return unpackMap(int16Val);
+        case bm::MP_RAW8:
+          read(uint8Val);
+          return unpackRaw(uint8Val);
         case bm::MP_RAW16:
-          read(int16Val);
-          return unpackRaw(int16Val);
+          read(uint16Val);
+          return unpackRaw(uint16Val);
         case bm::MP_RAW32:
-          read(int32Val);
-          return unpackRaw(int32Val);
+          read(uint32Val);
+          return unpackRaw(uint32Val);
+        case bm::MP_STR8:
+          read(uint8Val);
+          return unpackRaw(uint8Val);
+        case bm::MP_STR16:
+          read(uint16Val);
+          return unpackRaw(uint16Val);
+        case bm::MP_STR32:
+          read(uint32Val);
+          return unpackRaw(uint32Val);
       }
 
-      if (((uint8_t)(value & 0xE0)) == bm::MP_FIXRAW)
+      if (((uint8_t)(value & 0xE0)) == bm::MP_FIXSTR)
       {
-        return unpackRaw(value - bm::MP_FIXRAW);
+        return unpackRaw(value - bm::MP_FIXSTR);
       }
 
       if (((uint8_t)(value & 0xE0)) == bm::MP_NEGATIVE_FIXNUM)
