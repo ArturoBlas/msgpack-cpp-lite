@@ -57,6 +57,39 @@
 #include <locale>
 #include <iostream>
 
+
+//#include <boost/endian/conversion.hpp>
+#ifndef BOOST_ENDIAN_CONVERSION_HPP
+/* simple c++ endianess code, replace dependency to boost */
+namespace boost {
+  namespace endian {
+    template<class T>
+    T native_to_big(const T &in); //; 16 32 64
+
+    template<>
+    uint8_t native_to_big<uint8_t>(const uint8_t &in) {  return in;  }
+    template<>
+    uint16_t native_to_big<uint16_t>(const uint16_t &in) {  return _byteswap_ushort(in);  }
+    template<>
+    uint32_t native_to_big<uint32_t>(const uint32_t &in) {  return _byteswap_ulong(in);  }
+    template<>
+    uint64_t native_to_big<uint64_t>(const uint64_t &in) {  return _byteswap_uint64(in);  }
+    template<>
+    int8_t native_to_big<int8_t>(const int8_t &in) {  return in;  }
+    template<>
+    int16_t native_to_big<int16_t>(const int16_t &in) {  return _byteswap_ushort(in);  }
+    template<>
+    int32_t native_to_big<int32_t>(const int32_t &in) {  return _byteswap_ulong(in);  }
+    template<>
+    int64_t native_to_big<int64_t>(const int64_t &in) {  return _byteswap_uint64(in);  }
+
+    template<class T>
+     void big_to_native_inplace(T &in)
+     { in = native_to_big<T>(in); }
+  }
+}
+#endif
+
 #ifdef GLOBAL_NAMESPACE__
 #define NAMESPACE_HEADER__ namespace GLOBAL_NAMESPACE__
 #define NAMESPACE_PREFIX__ GLOBAL_NAMESPACE__::
@@ -184,7 +217,7 @@ class Packer
      * Constructor
      * @param out Packer output stream where the binary data will be put
      */
-    explicit Packer(std::ostream& out) : out_(out) {}
+    explicit Packer(::std::ostream& out) : out_(out) {}
 
     /**
      * This method allows to pack an object of any type
@@ -267,11 +300,11 @@ class Packer
       {
         if (value <= bm::MAX_7BIT)
         {
-          write<int8_t>((int8_t(value) | bm::MP_FIXNUM));
+          write<uint8_t>((uint8_t(value) | bm::MP_FIXNUM));
         }
         else if (value <= bm::MAX_8BIT)
         {
-          write(bm::MP_UINT8).write<int8_t>(value);
+          write(bm::MP_UINT8).write<uint8_t>(value);
         }
         else if (value <= bm::MAX_16BIT)
         {
@@ -566,7 +599,24 @@ class Packer
     template<typename T> inline
     Packer& write(T data)
     {
-      out_.write((char*) &data, sizeof(T));
+      T temp = boost::endian::native_to_big(data);
+      out_.write((char*) &temp , sizeof(T));
+      return *this;
+    }
+
+    inline
+    Packer& write(float data)
+    {
+      uint32_t temp = boost::endian::native_to_big( reinterpret_cast<uint32_t&>(data) );
+      out_.write((char*) &temp , sizeof(uint32_t));
+      return *this;
+    }
+
+    inline
+    Packer& write(double data)
+    {
+      uint64_t temp = boost::endian::native_to_big( reinterpret_cast<uint64_t&>(data) );
+      out_.write((char*) &temp , sizeof(uint64_t));
       return *this;
     }
 
@@ -629,7 +679,8 @@ enum object_type
   UINT64,   //<! uint64
   FLOAT,    //<! float
   DOUBLE,   //<! double
-  RAW,      //<! Raw bytes [fix raw, raw 16, raw 32]
+  RAW,      //<! Raw bytes [raw 8, raw 16, raw 32]
+  STR,      //<! Str bytes [fix str, str 8, str 16, str 32]
   ARRAY,    //<! Array [fix array, array 16, array 32]
   MAP       //<! Map [fix map, map 16, map 32]
 
@@ -815,11 +866,16 @@ TYPE_TRAITS(DOUBLE, double)
 
 typedef uint8_t* raw_type;
 TYPE_TRAITS(RAW,    raw_type)
-TYPE_CAST  (RAW,    std::string) // Type cast is implemented for raw type
-TYPE_CAST  (RAW,    std::wstring)
+TYPE_CAST  (RAW,    std::basic_string<uint8_t>) // Type cast is implemented for raw type
+TYPE_CAST  (RAW,    std::vector<uint8_t>) // Type cast is implemented for raw type
+
+typedef char* str_type;
+TYPE_TRAITS(STR,    str_type)
+TYPE_CAST  (STR,    std::string) // Type cast is implemented for str type
+TYPE_CAST  (STR,    std::wstring)
 
 typedef std::list<Object*> array_type;
-TYPE_TRAITS(ARRAY,    std::list<Object*>)
+TYPE_TRAITS(ARRAY,    array_type)
 
 typedef std::multimap<Object*,Object*> map_type;
 TYPE_TRAITS(MAP,    detail::map_type)
@@ -891,6 +947,48 @@ class MapObject : public ObjectImpl<map_type>
 };
 
 /**
+ * ObjectImpl class specilization for the STR type.
+ */
+class StrObject : public ObjectImpl<str_type>
+{
+  public:
+
+  /**
+   * Constructor
+   * @param value Reference to the data region handled
+   * by the Object, which ownership is now from
+   * the current Object which will destroy it on
+   * deletion.
+   * @param size Number of items held by this object
+   */
+  StrObject(str_type value, std::size_t size) : ObjectImpl<str_type>(value), size_(size)
+  {
+  }
+
+  /**
+   * Destructor
+   */
+  virtual ~StrObject()
+  {
+    delete[] value_;
+  }
+
+  template<typename char_t>
+  operator std::basic_string<char_t>() const
+  {
+    std::basic_string<char_t> str;
+    std::copy((char_t*)value_, (char_t*)(value_+size_), std::back_inserter(str));
+    return str;
+  }
+
+  private:
+
+  StrObject() {}
+
+  std::size_t size_;
+};
+
+/**
  * ObjectImpl class specilization for the RAW type.
  */
 class RawObject : public ObjectImpl<raw_type>
@@ -925,6 +1023,13 @@ class RawObject : public ObjectImpl<raw_type>
     return str;
   }
 
+  operator std::vector<uint8_t>() const
+  {
+    std::vector<uint8_t> raw;
+    std::copy(value_, (value_+size_), std::back_inserter(raw));
+    return raw;
+  }
+
   private:
 
   RawObject() {}
@@ -955,6 +1060,7 @@ typedef detail::ObjectImpl<detail::type_traits<DOUBLE>::type> Double;
 typedef detail::ArrayObject                                    Array;
 typedef detail::MapObject                                        Map;
 typedef detail::RawObject                                        Raw;
+typedef detail::StrObject                                        Str;
 
 /**
  * Exception likely to be thrown during the
@@ -1138,8 +1244,13 @@ class Unpacker
         throw unpack_exception("Reached end of stream");
 
       uint8_t value;
-      read(value); // Read the header
-
+      try
+      {
+        read(value); // Read the header
+      } catch ( unpack_exception &e)
+      {
+        return NULL;
+      }
       type_traits<FLOAT>::type  fVal;
       type_traits<DOUBLE>::type dVal;
       type_traits<INT8>::type   int8Val;
@@ -1160,10 +1271,12 @@ class Unpacker
         case bm::MP_TRUE:
           return new Bool(true);
         case bm::MP_FLOAT:
-          read(fVal);
+          read(uint32Val);
+          fVal = reinterpret_cast<float&>(uint32Val);
           return new Float(fVal);
         case bm::MP_DOUBLE:
-          read(dVal);
+          read(uint64Val);
+          dVal = reinterpret_cast<double&>(uint64Val);
           return new Double(dVal);
         case bm::MP_UINT8:
           read(uint8Val);
@@ -1251,6 +1364,12 @@ class Unpacker
       }
     }
 
+    bool empty() const
+    {
+      return  in_.eof();
+    }
+
+
   private:
 
     //! Unpack an array
@@ -1308,6 +1427,10 @@ class Unpacker
         throw unpack_exception("Reached end of stream while reading");
 
       in_.read((char*) &ret, sizeof(T));
+
+      if(in_.fail() || in_.eof())
+        throw unpack_exception("Reached end of stream while reading");
+      boost::endian::big_to_native_inplace(ret);
 
       return *this;
     }
